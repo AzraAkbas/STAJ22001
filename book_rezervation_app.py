@@ -394,10 +394,10 @@ class BookReservationApp(ctk.CTkToplevel):
                                k.adet,
                                ISNULL(SUM(CASE WHEN r.teslim_edildi_mi = 0 THEN 1 ELSE 0 END), 0) AS rezerve_edilen,
                                CASE
-                                   WHEN EXISTS (SELECT 1 \
-                                                FROM kitap_rezervasyon \
-                                                WHERE kitap_id = k.kitap_id \
-                                                  AND kullanici_id = ? \
+                                   WHEN EXISTS (SELECT 1 
+                                                FROM kitap_rezervasyon 
+                                                WHERE kitap_id = k.kitap_id 
+                                                  AND kullanici_id = ? 
                                                   AND teslim_edildi_mi = 0) THEN 1
                                    ELSE 0 END                                                     AS is_reserved
                         FROM Kitap k
@@ -413,31 +413,37 @@ class BookReservationApp(ctk.CTkToplevel):
                           AND (? = '' OR k.yayinevi LIKE ?)
                         GROUP BY k.kitap_id, k.ad, k.yayin_yili, k.yayinevi, k.kapak_resmi_url, k.sayfa_sayisi, k.isbn, k.ozet, k.adet
                         HAVING (? = 'Tümü' OR
-                                (? = 'Evet' AND \
+                                (? = 'Evet' AND 
                                  k.adet > ISNULL(SUM(CASE WHEN r.teslim_edildi_mi = 0 THEN 1 ELSE 0 END), 0)) OR
-                                (? = 'Hayır' AND \
+                                (? = 'Hayır' AND 
                                  k.adet <= ISNULL(SUM(CASE WHEN r.teslim_edildi_mi = 0 THEN 1 ELSE 0 END), 0)))
                         ORDER BY k.ad;
                         """
 
                 # Parametreleri düzenle
-                search_term_like = f"%{search_term}%"
+                search_term_like = f"%{search_term}%" if search_term else '%'
                 author_like = f"%{author}%" if author else '%'
                 genre_like = f"%{genre}%" if genre else '%'
                 publisher_like = f"%{publisher}%" if publisher else '%'
 
-                # Yıl filtresi için özel durum
-                year_param = int(year) if year and year.isdigit() else None
+                # Yıl filtresi için özel durum - integer'a dönüştür
+                year_param = None
+                if year and year.strip():
+                    try:
+                        year_param = int(year.strip())
+                    except ValueError:
+                        year_param = None
 
-                params = (
+                # Parametreleri hazırla
+                params = [
                     self.user_id,
                     search_term_like, search_term_like, search_term_like,
-                    author, author_like,
-                    genre, genre_like,
-                    year, year_param,
-                    publisher, publisher_like,
+                    author or '', author_like,
+                    genre or '', genre_like,
+                    year or '', year_param,
+                    publisher or '', publisher_like,
                     availability, availability, availability
-                )
+                ]
 
                 cursor.execute(sorgu, params)
                 self.books = cursor.fetchall()
@@ -451,7 +457,13 @@ class BookReservationApp(ctk.CTkToplevel):
                 (kitap_id, ad, yayin_yili, yayinevi, kapak_resmi_url, sayfa_sayisi, isbn, ozet, turler, yazarlar,
                  adet, rezerve_edilen, is_reserved) = book_row
 
-                mevcut_adet = adet
+                # Sayısal değerleri güvenli şekilde dönüştür
+                try:
+                    adet_int = int(adet) if adet is not None else 0
+                    rezerve_edilen_int = int(rezerve_edilen) if rezerve_edilen is not None else 0
+                    mevcut_adet = max(0, adet_int - rezerve_edilen_int)
+                except (ValueError, TypeError):
+                    mevcut_adet = 0
 
                 self.book_tree.insert("", "end",
                                       values=(ad, yazarlar, turler, sayfa_sayisi, mevcut_adet),
@@ -682,12 +694,14 @@ class BookReservationApp(ctk.CTkToplevel):
 
                 # Kullanıcının aktif rezervasyon sayısını kontrol et
                 cursor.execute("""
-                               SELECT COUNT(*)
-                               FROM kitap_rezervasyon
-                               WHERE kullanici_id = ?
-                                 AND durum = 'aktif'
-                               """, self.user_id)
-                active_reservations_count = cursor.fetchone()[0]
+                                 SELECT COUNT(*)
+                                 FROM kitap_rezervasyon
+                                 WHERE kullanici_id = ?
+                                   AND durum = 'aktif'
+                                 """, self.user_id)
+                # Buradaki değeri int'e dönüştürdüğünüzden emin olun
+                result = cursor.fetchone()
+                active_reservations_count = int(result[0]) if result and result[0] is not None else 0
 
                 if active_reservations_count >= 5:
                     messagebox.showerror("Hata",
@@ -705,7 +719,12 @@ class BookReservationApp(ctk.CTkToplevel):
                     messagebox.showerror("Hata", "Kitap bulunamadı.")
                     return
 
-                adet = result[0]
+                # Adet değerini güvenli şekilde integer'a dönüştür
+                try:
+                    adet = int(result[0]) if result[0] is not None else 0
+                except (ValueError, TypeError):
+                    adet = 0
+
                 if adet <= 0:
                     messagebox.showerror("Hata", "Kitap stokta bulunmamaktadır.")
                     return
@@ -819,7 +838,7 @@ class BookReservationApp(ctk.CTkToplevel):
         summary_label.pack(fill="x", padx=10, pady=(0, 20))
 
         # Rezervasyon Butonu
-        is_available = book_details['mevcut_adet'] > 0
+        is_available = int(book_details['mevcut_adet']) > 0
         if book_details['is_reserved']:
             reserve_button = ctk.CTkButton(main_frame, text="Rezerve Edildi", state="disabled", fg_color=ACCENT)
         elif is_available:
@@ -875,8 +894,7 @@ class BookReservationApp(ctk.CTkToplevel):
                                  LEFT JOIN yazar Y ON ky.yazar_id = Y.yazar_id
                                  LEFT JOIN kitap_rezervasyon r ON k.kitap_id = r.kitap_id
                         WHERE k.kitap_id = ?
-                        GROUP BY k.kitap_id, k.ad, k.yayin_yili, k.yayinevi, k.kapak_resmi_url, k.sayfa_sayisi, k.isbn,
-                                  k.adet;
+GROUP BY k.kitap_id, k.ad, k.yayin_yili, k.yayinevi, k.kapak_resmi_url, k.sayfa_sayisi, k.isbn, k.ozet, k.adet;
                         """
                 cursor.execute(sorgu, self.user_id, book_id)
                 book_row = cursor.fetchone()
@@ -887,7 +905,7 @@ class BookReservationApp(ctk.CTkToplevel):
                 (kitap_id, ad, yayin_yili, yayinevi, kapak_resmi_url, sayfa_sayisi, isbn, ozet, turler, yazarlar,
                  adet, rezerve_edilen, is_reserved) = book_row
                 rezerve_edilen = rezerve_edilen if rezerve_edilen is not None else 0
-                mevcut_adet = adet - rezerve_edilen
+                mevcut_adet = int(adet) - int(rezerve_edilen)
 
                 return {
                     "id": kitap_id,
