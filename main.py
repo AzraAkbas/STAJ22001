@@ -160,7 +160,7 @@ class App(ctk.CTk):
         if remembered_user:
             self.current_user_name = remembered_user
             self.current_user_role = remembered_role
-            self.current_user_id = remembered_id  # Store the user ID
+            self.current_user_id = remembered_id
             # Hatırlanan kullanıcı için ceza puanını veritabanından çekme
             conn = get_db_connection()
             if conn:
@@ -246,13 +246,13 @@ class App(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Veritabanı Hatası", str(e))
             traceback.print_exc()
-        # NOT: Bağlantıyı burada kapatmayın, bu işlemi çağıran fonksiyonun yapmasına izin verin.
+
     def show_frame(self, page_name: str):
         frame = self.frames.get(page_name)
         if frame:
             if page_name == "main_app":
                 if self.current_user_name:
-                    # 👇 GÜNCELLENDİ: Penalty puanını frame'e gönder
+                    # Penalty puanını frame'e gönder
                     frame.set_user_name(
                         self.current_user_name,
                         self.current_user_role,
