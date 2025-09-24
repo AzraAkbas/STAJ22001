@@ -391,15 +391,13 @@ class TableReservationApp(ctk.CTkFrame):
 
                             # Ceza kaydını tabloya yaz
                             cursor.execute("""
-                                           INSERT INTO cezalar (kullanici_id, aciklama, tarih, masa_rezervasyon_id)
-                                           VALUES (?, ?, ?, ?)
-                                           """, (
-                                               kullanici_id, 5,
-                                               f"Masa rezervasyonuna gelinmedi - Tarih: {tarih}, Saat: {bitis_saati}",
-                                               current_datetime.date(),
-                                               masa_rezervasyon_id
-                                           ))
-
+                                                                       INSERT INTO cezalar (kullanici_id, aciklama, tarih)
+                                                                       VALUES (?, ?, ?)
+                                                                       """, (
+                                kullanici_id,
+                                f"Masa rezervasyonuna gelinmedi - Tarih: {tarih}, Saat: {bitis_saati} - Ceza Puani: 5",
+                                current_datetime.date()
+                            ))
                             # Rezervasyonu 'Ceza' durumuna geçir
                             cursor.execute("""
                                            UPDATE masa_rezervasyon
@@ -579,7 +577,7 @@ class TableReservationApp(ctk.CTkFrame):
                                VALUES (?, ?, ?, ?, ?, ?)
                                """,
                                (self.kullanici_id, masa_id_for_reservation, rezervasyon_tarihi_str, baslangic_saati_str,
-                                bitis_saati_str, 0))
+                                bitis_saati_str, False))
 
                 conn.commit()
 
@@ -589,7 +587,9 @@ class TableReservationApp(ctk.CTkFrame):
                 self._display_message(f"Rezervasyonunuz başarıyla yapıldı: {selected_date} {start} - {end}")
 
         except pyodbc.Error as e:
-            messagebox.showerror("Veritabanı Hatası", f"Rezervasyon kaydedilirken hata oluştu.\nDetay: {e}")
+            # Sadece bilinen 'HY000' hatasını göz ardı et, diğerlerini göster
+            if "HY000" not in str(e):
+                messagebox.showerror("Veritabanı Hatası", f"Rezervasyon kaydedilirken hata oluştu.\nDetay: {e}")
         except Exception as e:
             messagebox.showerror("Hata", f"Beklenmedik bir hata oluştu: {e}")
     def _reset_all_seat_outlines(self):
@@ -628,24 +628,23 @@ class TableReservationApp(ctk.CTkFrame):
         if not confirm:
             return
 
-        conn = None
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
+            with get_db_connection() as conn:  # 'with' ifadesiyle bağlantıyı güvenle yönetiyoruz.
+                cursor = conn.cursor()
 
-            masa_id_to_cancel = self.masa_data.get(self.user_active_reservation_seat_id)
-            if masa_id_to_cancel is None:
-                messagebox.showerror("Hata", f"İptal edilecek sandalye ID'si için masa ID bulunamadı.")
-                return
+                masa_id_to_cancel = self.masa_data.get(self.user_active_reservation_seat_id)
+                if masa_id_to_cancel is None:
+                    messagebox.showerror("Hata", f"İptal edilecek sandalye ID'si için masa ID bulunamadı.")
+                    return
 
-            cursor.execute("""
-                           UPDATE masa_rezervasyon
-                           SET iptal_durumu = 1
-                           WHERE kullanici_id = ?
-                             AND masa_id = ?
-                             AND iptal_durumu = 0
-                           """, (self.kullanici_id, masa_id_to_cancel))
-            conn.commit()
+                cursor.execute("""
+                               UPDATE masa_rezervasyon
+                               SET iptal_durumu = 1
+                               WHERE kullanici_id = ?
+                                 AND masa_id = ?
+                                 AND iptal_durumu = 0
+                               """, (self.kullanici_id, masa_id_to_cancel))
+                conn.commit()
 
             self.reserved_seats_data = self._load_reservations_from_db()
             self.user_active_reservation_seat_id = self._load_user_active_reservation_name_from_db()
@@ -654,9 +653,6 @@ class TableReservationApp(ctk.CTkFrame):
 
         except Exception as e:
             messagebox.showerror("Veritabanı Hatası", f"Rezervasyon iptal edilirken hata oluştu: {e}")
-        finally:
-            if conn:
-                conn.close()
 
     def _update_seat_visuals(self):
         """Sandalyelerin renklerini ve kenarlıklarını rezervasyon durumuna göre günceller."""
