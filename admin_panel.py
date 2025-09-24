@@ -739,12 +739,17 @@ class ReservationManagerFrame(ctk.CTkFrame):
             # Rezervasyonu tamamla ve durumu güncelle
             # Eğer gecikme varsa durumu "Ceza" olarak güncelle
             new_status = "Ceza" if is_delayed else "tamamlandı"
+
+            # Kitabın iade tarihini şu anki tarih ve saat olarak ayarla
+            iade_tarihi = datetime.now()
+
             cursor.execute("""
                            UPDATE kitap_rezervasyon
                            SET durum            = ?,
-                               teslim_edildi_mi = 1
+                               teslim_edildi_mi = 1,
+                               iade_tarihi      = ?
                            WHERE kitap_rezervasyon_id = ?
-                           """, (new_status, res_id))
+                           """, (new_status, iade_tarihi, res_id))
 
             # Kitabın stok adedini güncelle
             cursor.execute("""
@@ -784,13 +789,32 @@ class ReservationManagerFrame(ctk.CTkFrame):
         reservation_id = item_values[0]
         user_name = item_values[2]
         masa_adi = item_values[1]
+        reservation_date_str = item_values[3]
+        reservation_time_range_str = item_values[4]
         current_status = item_values[5]
 
-        if current_status != "Aktif":
+        # Sadece "Aktif" rezervasyonlar için işleme devam et
+        if current_status not in ["Aktif"]:
             messagebox.showwarning("Uyarı", "Sadece aktif rezervasyonlar için 'Geldi' işaretlenebilir.")
             return
-        if messagebox.askyesno("Onay",
-                               f"{user_name} kullanıcısının {masa_adi} için geldiğini onaylıyor musunuz?"):
+
+        # Tarih ve saat bilgisini kontrol et
+        try:
+            # Rezervasyon başlangıç saatini al
+            start_time_str = reservation_time_range_str.split(' - ')[0]
+            # Rezervasyon tarihini ve saatini birleştirerek datetime nesnesi oluştur
+            reservation_datetime = datetime.strptime(f"{reservation_date_str} {start_time_str}", "%d.%m.%Y %H:%M")
+
+            # Rezervasyon saatinden önce işaretlenmesini önle
+            if datetime.now() < reservation_datetime:
+                messagebox.showwarning("Uyarı", "Rezervasyon saati gelmeden 'Geldi' olarak işaretleyemezsiniz.")
+                return
+
+        except ValueError as e:
+            messagebox.showerror("Hata", f"Tarih/saat formatı hatası: {e}")
+            return
+
+        if messagebox.askyesno("Onay", f"{user_name} kullanıcısının {masa_adi} için geldiğini onaylıyor musunuz?"):
             conn = get_db_connection()
             if not conn:
                 return
@@ -806,7 +830,6 @@ class ReservationManagerFrame(ctk.CTkFrame):
                 messagebox.showerror("Hata", f"Rezervasyon güncellenirken hata: {e}")
             finally:
                 conn.close()
-
     def on_treeview_select(self, event):
         # Bu metot, treeview'de bir öğe seçildiğinde tetiklenir.
         selected_items = self.reservation_treeview.selection()
@@ -926,9 +949,11 @@ class ReservationManagerFrame(ctk.CTkFrame):
         return str(masa_no).replace('_', '')
 
     def fetch_table_reservations(self):
+        """Veritabanından tüm masa rezervasyonlarını çeker ve görüntüler."""
         self.table_tree.delete(*self.table_tree.get_children())
         conn = get_db_connection()
-        if not conn: return
+        if not conn:
+            return
         try:
             cursor = conn.cursor()
             query = """
@@ -938,7 +963,8 @@ class ReservationManagerFrame(ctk.CTkFrame):
                            mr.tarih,
                            mr.saat_baslangic,
                            mr.saat_bitis,
-                           mr.iptal_durumu
+                           mr.iptal_durumu,
+                           mr.durum
                     FROM masa_rezervasyon mr
                              JOIN masa m ON mr.masa_id = m.masa_id
                              JOIN kullanici u ON mr.kullanici_id = u.kullanici_id
@@ -953,31 +979,31 @@ class ReservationManagerFrame(ctk.CTkFrame):
             cursor.execute(query)
             raw_reservations = cursor.fetchall()
 
-            # Rezervasyon durumlarını manuel olarak hesapla
+            # Rezervasyon durumlarını manuel olarak hesapla ve tek bir döngüde liste oluştur
             self.all_table_reservations = []
             for reservation in raw_reservations:
-                reservation_id, masa_no, uye, tarih, baslangic, bitis, iptal_durumu = reservation
+                reservation_id, masa_no, uye, tarih, baslangic, bitis, iptal_durumu, durum_from_db = reservation
 
                 # Masa adını formatla
                 masa_adi = self.format_masa_adi(masa_no)
 
                 # Durumu belirle
-                if iptal_durumu:
-                    durum = "İptal Edildi"
+                if durum_from_db and durum_from_db.strip():
+                    durum_to_display = durum_from_db
+                elif iptal_durumu:
+                    durum_to_display = "İptal Edildi"
                 else:
-                    # Rezervasyonun geçmişte olup olmadığını kontrol et
                     now = datetime.now()
-                    rezervasyon_tarihi = tarih
                     rezervasyon_bitis = datetime.combine(tarih, bitis) if tarih and bitis else None
 
                     if rezervasyon_bitis and rezervasyon_bitis < now:
-                        durum = "Tamamlandı"
+                        durum_to_display = "Tamamlandı"
                     else:
-                        durum = "Aktif"
+                        durum_to_display = "Aktif"
 
                 # Güncellenmiş rezervasyon bilgilerini sakla
                 self.all_table_reservations.append((
-                    reservation_id, masa_adi, uye, tarih, baslangic, bitis, durum
+                    reservation_id, masa_adi, uye, tarih, baslangic, bitis, durum_to_display
                 ))
 
             # Filtreleme ve görüntüleme
@@ -990,8 +1016,10 @@ class ReservationManagerFrame(ctk.CTkFrame):
                     filtered_list = [r for r in filtered_list if r[6] == "Aktif"]
                 elif table_status_filter == "İptal Edildi":
                     filtered_list = [r for r in filtered_list if r[6] == "İptal Edildi"]
-                elif table_status_filter == "Süresi Doldu":
-                    filtered_list = [r for r in filtered_list if r[6] == "Süresi Doldu"]
+                elif table_status_filter == "Tamamlandı":
+                    filtered_list = [r for r in filtered_list if r[6] == "Tamamlandı"]
+                elif table_status_filter == "Ceza":
+                    filtered_list = [r for r in filtered_list if r[6] == "Ceza"]
 
             if table_date_filter:
                 filtered_list = [r for r in filtered_list if r[3] and r[3].date() == table_date_filter]
@@ -1003,7 +1031,6 @@ class ReservationManagerFrame(ctk.CTkFrame):
             messagebox.showerror("Hata", f"Masa rezervasyonları yüklenirken hata: {e}")
         finally:
             conn.close()
-
     def display_table_reservations(self, reservations):
         self.table_tree.delete(*self.table_tree.get_children())
         if not reservations:
